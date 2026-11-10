@@ -260,7 +260,7 @@ button.primary:disabled {
   height: 100%;
 }
 
-/* Same box, fit and mirroring as LiveKit's local camera <video>. */
+/* Same box and fit as LiveKit's <video>. */
 .pose-overlay {
   position: absolute;
   inset: 0;
@@ -268,8 +268,13 @@ button.primary:disabled {
   height: 100%;
   object-fit: cover;
   object-position: center;
-  transform: rotateY(180deg);
   pointer-events: none; /* clicks pass through to the tile */
+}
+
+/* LiveKit mirrors only YOUR camera (selfie view). Remote video isn't flipped,
+   and landmarks are always in un-mirrored camera coordinates. */
+.pose-overlay-local {
+  transform: rotateY(180deg);
 }
 
 .pose-stats {

@@ -1,70 +1,56 @@
-import { DrawingUtils, PoseLandmarker, type PoseLandmarkerResult } from '@mediapipe/tasks-vision'
+import { useRoomContext } from '@livekit/components-react'
 import { useRef } from 'react'
+import { drawPose } from '../pose/drawPose'
+import { encodePose, POSE_TOPIC } from '../pose/poseWire'
 import { usePoseDetection, type PoseStats } from '../pose/usePoseDetection'
+import type { PoseFrame } from '../types/pose'
+
+/** How often landmarks are sent to other participants. Detection itself runs at camera rate. */
+const SEND_INTERVAL_MS = 1000 / 15
 
 interface PoseOverlayProps {
-  /** The camera track to analyse (the local participant's, in Phase 2). */
+  /** The local participant's camera track. */
   track: MediaStreamTrack
 }
 
 /**
- * Draws the detected skeleton on a <canvas> stacked on top of a LiveKit video tile.
- *
- * Alignment trick: the canvas is sized to the video's real resolution and
- * styled exactly like LiveKit's <video> (same object-fit and the same mirror
- * flip for the local camera). Landmarks are normalized 0..1, so multiplying by
- * the canvas size puts each point on the right pixel — the browser then scales
- * and crops the canvas the same way it scales and crops the video.
+ * LOCAL participant: detects the pose on your own camera, draws it on your
+ * tile, and broadcasts the landmarks so everyone else can draw it on theirs
+ * (see RemotePoseOverlay).
  */
 export function PoseOverlay({ track }: PoseOverlayProps) {
+  const room = useRoomContext()
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const drawingRef = useRef<{ ctx: CanvasRenderingContext2D; utils: DrawingUtils } | null>(null)
+  const lastSentRef = useRef(0)
 
   const stats = usePoseDetection(track, (result, video) => {
-    const canvas = canvasRef.current
-    if (canvas) draw(canvas, drawingRef, result, video)
+    const pose = result.landmarks[0]
+    const frame: PoseFrame = {
+      width: video.videoWidth,
+      height: video.videoHeight,
+      // Keep only the 2D fields (x, y, visibility) — that's what we share.
+      landmarks: pose ? pose.map(({ x, y, visibility }) => ({ x, y, visibility })) : null,
+    }
+
+    if (canvasRef.current) drawPose(canvasRef.current, frame.landmarks, frame.width, frame.height)
+
+    const now = performance.now()
+    if (now - lastSentRef.current >= SEND_INTERVAL_MS) {
+      lastSentRef.current = now
+      // Lossy = sent once, no retransmission. A lost pose is fine: a newer one
+      // is ~66 ms behind it, and stale data arriving late would be worse.
+      room.localParticipant
+        .publishData(encodePose(frame), { reliable: false, topic: POSE_TOPIC })
+        .catch((err) => console.warn('[pose] publishData failed', err))
+    }
   })
 
   return (
     <>
-      <canvas ref={canvasRef} className="pose-overlay" aria-hidden="true" />
+      <canvas ref={canvasRef} className="pose-overlay pose-overlay-local" aria-hidden="true" />
       <PoseStatsBadge stats={stats} />
     </>
   )
-}
-
-function draw(
-  canvas: HTMLCanvasElement,
-  drawingRef: { current: { ctx: CanvasRenderingContext2D; utils: DrawingUtils } | null },
-  result: PoseLandmarkerResult,
-  video: HTMLVideoElement,
-) {
-  const { videoWidth: w, videoHeight: h } = video
-  if (!w || !h) return
-
-  // Match the canvas's pixel grid to the video's resolution (changes rarely,
-  // e.g. when the camera or simulcast layer changes).
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w
-    canvas.height = h
-  }
-  // Mirror LiveKit's CSS: portrait video is letterboxed (contain), landscape is cropped (cover).
-  canvas.style.objectFit = h > w ? 'contain' : 'cover'
-
-  if (!drawingRef.current) {
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    drawingRef.current = { ctx, utils: new DrawingUtils(ctx) }
-  }
-  const { ctx, utils } = drawingRef.current
-
-  ctx.clearRect(0, 0, w, h)
-  const lineWidth = Math.max(2, w / 320) // scale with resolution so it looks the same at 480p and 1080p
-
-  for (const landmarks of result.landmarks) {
-    utils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, { color: '#22d3ee', lineWidth })
-    utils.drawLandmarks(landmarks, { color: '#f472b6', fillColor: '#f472b6', radius: lineWidth * 1.2, lineWidth: 1 })
-  }
 }
 
 function PoseStatsBadge({ stats }: { stats: PoseStats }) {

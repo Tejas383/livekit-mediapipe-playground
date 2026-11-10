@@ -1,6 +1,7 @@
 import { GridLayout, isTrackReference, ParticipantTile, useTrackRefContext, useTracks } from '@livekit/components-react'
 import { Track } from 'livekit-client'
 import { PoseOverlay } from '../components/PoseOverlay'
+import { RemotePoseOverlay } from '../components/RemotePoseOverlay'
 
 /**
  * One tile per participant's camera. `withPlaceholder` keeps a tile for
@@ -20,21 +21,26 @@ export function ParticipantGrid() {
 
 /**
  * GridLayout renders this once per track, providing that track via context.
- * It's a normal LiveKit tile, plus a pose overlay on the LOCAL camera only
- * (Phase 2 processes just your own video; remote participants come in Phase 4).
+ * It's a normal LiveKit tile plus a pose overlay:
+ * - your own tile: pose is detected here, drawn, and broadcast (PoseOverlay)
+ * - other people's tiles: their broadcast landmarks are drawn (RemotePoseOverlay)
  */
 function PoseTile() {
   const trackRef = useTrackRefContext()
+  const hasVideo = isTrackReference(trackRef) && !trackRef.publication.isMuted
 
-  const localCameraTrack =
-    isTrackReference(trackRef) && trackRef.participant.isLocal && !trackRef.publication.isMuted
-      ? trackRef.publication.track?.mediaStreamTrack
-      : undefined
+  let overlay = null
+  if (hasVideo && trackRef.participant.isLocal) {
+    const track = trackRef.publication.track?.mediaStreamTrack
+    if (track) overlay = <PoseOverlay track={track} />
+  } else if (hasVideo) {
+    overlay = <RemotePoseOverlay identity={trackRef.participant.identity} />
+  }
 
   return (
     <div className="pose-tile">
       <ParticipantTile />
-      {localCameraTrack && <PoseOverlay track={localCameraTrack} />}
+      {overlay}
     </div>
   )
 }
