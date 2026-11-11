@@ -9,10 +9,11 @@
  * - Those files are imported with `?url` from node_modules. Serving them from
  *   /public fails in dev: Vite refuses to `import()` files from /public.
  */
-import type { PoseLandmarker } from '@mediapipe/tasks-vision'
 import wasmLoaderPath from '@mediapipe/tasks-vision/vision_wasm_module_internal.js?url'
 import wasmBinaryPath from '@mediapipe/tasks-vision/vision_wasm_module_internal.wasm?url'
-import { createPoseLandmarker, createTimestamper, toPoseFrame } from './createLandmarker'
+import { createPostureAnalyzer, needsHandModel } from '../posture/analyzer'
+import { createHandLandmarker, createPoseLandmarker } from './createLandmarker'
+import { createFrameProcessor } from './processFrame'
 import type { MainToWorker, WorkerToMain } from './protocol'
 
 // Our tsconfig uses the DOM lib, where `self` is a Window. Describe the worker
@@ -23,15 +24,12 @@ const worker = self as unknown as {
   ModuleFactory?: unknown
 }
 
-let landmarker: PoseLandmarker | null = null
-const nextTimestamp = createTimestamper()
+/** Pose detection → posture analysis for one frame. Set once 'init' finishes. */
+let processFrame: ReturnType<typeof createFrameProcessor> | null = null
 
 function detect(source: VideoFrame | ImageBitmap, width: number, height: number) {
-  if (!landmarker) return
-  const start = performance.now()
-  const result = landmarker.detectForVideo(source, nextTimestamp())
-  const inferenceMs = performance.now() - start
-  worker.postMessage({ type: 'result', frame: toPoseFrame(result.landmarks, width, height), inferenceMs })
+  if (!processFrame) return
+  worker.postMessage({ type: 'result', ...processFrame(source, width, height) })
 }
 
 /** Primary path: pull frames from the transferred stream, one at a time. */
@@ -60,13 +58,15 @@ worker.onmessage = async (e) => {
         // Keep our own reference to the factory so createPoseLandmarker can
         // restore it before a fallback attempt.
         const factory = (await import(/* @vite-ignore */ wasmLoaderPath)).default
-        const loaded = await createPoseLandmarker(
-          { wasmLoaderPath, wasmBinaryPath },
-          msg.delegate,
-          msg.modelPath,
-          () => (worker.ModuleFactory = factory),
-        )
-        landmarker = loaded.landmarker
+        const restoreFactory = () => (worker.ModuleFactory = factory)
+        const fileset = { wasmLoaderPath, wasmBinaryPath }
+        const loaded = await createPoseLandmarker(fileset, msg.delegate, msg.modelPath, restoreFactory)
+        // Second MediaPipe task in this worker: also needs the factory restored.
+        const hands = needsHandModel(msg.analyzer, msg.exercise)
+          ? await createHandLandmarker(fileset, msg.delegate, msg.handModelPath, restoreFactory)
+          : null
+        // The exercise's rules run here, in the worker, right after detection.
+        processFrame = createFrameProcessor(loaded.landmarker, hands, createPostureAnalyzer(msg.analyzer, msg.exercise))
         worker.postMessage({ type: 'ready', delegate: loaded.delegate })
         break
       }

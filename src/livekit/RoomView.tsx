@@ -7,7 +7,10 @@ import {
   useConnectionState,
 } from '@livekit/components-react'
 import { ConnectionError, ConnectionErrorReason, DisconnectReason, MediaDeviceFailure } from 'livekit-client'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { ExercisePicker } from '../components/ExercisePicker'
+import { DEFAULT_EXERCISE, type ExerciseId } from '../posture/exercises'
+import { ExerciseContext } from './exerciseContext'
 import { canUseMediaDevices } from './media'
 import { ParticipantGrid } from './ParticipantGrid'
 import type { JoinDetails } from './token'
@@ -27,6 +30,10 @@ export function RoomView({ details, onLeave }: RoomViewProps) {
       ? null
       : "Camera and microphone are unavailable because this page isn't served over HTTPS (or localhost). You've joined view-only.",
   )
+
+  // Which exercise's rules run on your camera. Changed with the header buttons.
+  const [exercise, setExercise] = useState<ExerciseId>(DEFAULT_EXERCISE)
+  const exerciseContext = useMemo(() => ({ exercise, setExercise }), [exercise])
 
   function handleError(err: Error) {
     if (err instanceof ConnectionError) {
@@ -52,30 +59,33 @@ export function RoomView({ details, onLeave }: RoomViewProps) {
       onError={handleError}
       onMediaDeviceFailure={(failure, kind) => setDeviceError(describeDeviceFailure(failure, kind))}
     >
-      <header className="room-header">
-        <RoomName className="room-name" />
-        <ConnectionBadge />
-      </header>
+      <ExerciseContext.Provider value={exerciseContext}>
+        <header className="room-header">
+          <RoomName className="room-name" />
+          <ConnectionBadge />
+          <ExercisePicker />
+        </header>
 
-      {deviceError && (
-        <div className="banner" role="alert">
-          {deviceError}
-          <button type="button" onClick={() => setDeviceError(null)} aria-label="Dismiss">
-            ×
-          </button>
+        {deviceError && (
+          <div className="banner" role="alert">
+            {deviceError}
+            <button type="button" onClick={() => setDeviceError(null)} aria-label="Dismiss">
+              ×
+            </button>
+          </div>
+        )}
+
+        <div className="room-stage">
+          <ParticipantGrid />
         </div>
-      )}
 
-      <div className="room-stage">
-        <ParticipantGrid />
-      </div>
-
-      {/* Plays every remote participant's audio. Without it you'd see but not hear them. */}
-      <RoomAudioRenderer />
-      <ControlBar
-        controls={{ microphone: mediaAllowed, camera: mediaAllowed, screenShare: false, chat: false }}
-      />
-      <ConnectionStateToast />
+        {/* Plays every remote participant's audio. Without it you'd see but not hear them. */}
+        <RoomAudioRenderer />
+        <ControlBar
+          controls={{ microphone: mediaAllowed, camera: mediaAllowed, screenShare: false, chat: false }}
+        />
+        <ConnectionStateToast />
+      </ExerciseContext.Provider>
     </LiveKitRoom>
   )
 }

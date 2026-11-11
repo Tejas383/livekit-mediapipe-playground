@@ -1,5 +1,5 @@
-import { PoseLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision'
-import type { PoseFrame } from '../types/pose'
+import { HandLandmarker, PoseLandmarker, type HandLandmarkerResult, type NormalizedLandmark } from '@mediapipe/tasks-vision'
+import type { Hand2D, PoseFrame } from '../types/pose'
 
 export type Delegate = 'GPU' | 'CPU'
 
@@ -10,40 +10,88 @@ export interface WasmFileset {
 }
 
 export const MODEL_PATH = `${import.meta.env.BASE_URL}mediapipe/models/pose_landmarker_lite.task`
+export const HAND_MODEL_PATH = `${import.meta.env.BASE_URL}mediapipe/models/hand_landmarker.task`
 
 /**
- * Creates a PoseLandmarker, trying the preferred delegate first and falling
- * back to the other one if it fails.
+ * Tries the preferred delegate first and falls back to the other one.
  *
  * `beforeEachAttempt` lets the worker restore `self.ModuleFactory` — MediaPipe
- * deletes it after one use, so a second create (the fallback) would fail.
+ * deletes it after each task is created, so any second create (a fallback,
+ * or a second model like the hand landmarker) would otherwise fail.
  */
+async function createWithFallback<T>(
+  preferred: Delegate,
+  label: string,
+  create: (delegate: Delegate) => Promise<T>,
+  beforeEachAttempt?: () => void,
+): Promise<{ task: T; delegate: Delegate }> {
+  const order: Delegate[] = preferred === 'GPU' ? ['GPU', 'CPU'] : ['CPU', 'GPU']
+  let lastError: unknown
+  for (const delegate of order) {
+    try {
+      beforeEachAttempt?.()
+      return { task: await create(delegate), delegate }
+    } catch (err) {
+      console.warn(`[${label}] ${delegate} delegate failed`, err)
+      lastError = err
+    }
+  }
+  throw lastError
+}
+
 export async function createPoseLandmarker(
   fileset: WasmFileset,
   preferred: Delegate,
   modelPath: string,
   beforeEachAttempt?: () => void,
 ): Promise<{ landmarker: PoseLandmarker; delegate: Delegate }> {
-  const order: Delegate[] = preferred === 'GPU' ? ['GPU', 'CPU'] : ['CPU', 'GPU']
-  let lastError: unknown
-
-  for (const delegate of order) {
-    try {
-      beforeEachAttempt?.()
-      const landmarker = await PoseLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: modelPath, delegate },
+  const { task, delegate } = await createWithFallback(
+    preferred,
+    'pose',
+    (d) =>
+      PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: modelPath, delegate: d },
         // VIDEO mode tracks the pose between frames (faster + smoother than
         // detecting from scratch). Requires strictly increasing timestamps.
         runningMode: 'VIDEO',
         numPoses: 1,
-      })
-      return { landmarker, delegate }
-    } catch (err) {
-      console.warn(`[pose] ${delegate} delegate failed`, err)
-      lastError = err
+      }),
+    beforeEachAttempt,
+  )
+  return { landmarker: task, delegate }
+}
+
+/** Hand model: only created for exercises that need hands. */
+export async function createHandLandmarker(
+  fileset: WasmFileset,
+  preferred: Delegate,
+  modelPath: string,
+  beforeEachAttempt?: () => void,
+): Promise<HandLandmarker> {
+  const { task } = await createWithFallback(
+    preferred,
+    'hands',
+    (d) =>
+      HandLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: modelPath, delegate: d },
+        runningMode: 'VIDEO',
+        numHands: 2,
+      }),
+    beforeEachAttempt,
+  )
+  return task
+}
+
+/** Converts MediaPipe hand output to our 2D format. */
+export function toHands(result: HandLandmarkerResult): Hand2D[] {
+  return result.landmarks.map((points, i) => {
+    const category = result.handedness[i]?.[0]
+    return {
+      handedness: category?.categoryName === 'Left' ? 'Left' : 'Right',
+      score: category?.score ?? 0,
+      landmarks: points.map(({ x, y }) => ({ x, y })),
     }
-  }
-  throw lastError
+  })
 }
 
 /** Converts MediaPipe output to our shared 2D format (drops z and world landmarks). */

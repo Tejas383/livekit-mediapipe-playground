@@ -1,5 +1,5 @@
-import { DrawingUtils, PoseLandmarker } from '@mediapipe/tasks-vision'
-import type { PoseLandmark2D } from '../types/pose'
+import { DrawingUtils, HandLandmarker, PoseLandmarker } from '@mediapipe/tasks-vision'
+import type { Hand2D, PoseLandmark2D } from '../types/pose'
 
 // One DrawingUtils per canvas, created on first draw. A WeakMap entry is
 // dropped automatically when its canvas is garbage-collected.
@@ -13,13 +13,14 @@ const drawers = new WeakMap<HTMLCanvasElement, { ctx: CanvasRenderingContext2D; 
  * they land on the right pixels, and the browser crops/scales the canvas the
  * same way it crops/scales the video.
  *
- * Pass `landmarks = null` to clear the canvas.
+ * Pass `landmarks = null` to clear the canvas. `hands` (optional) are drawn on top.
  */
 export function drawPose(
   canvas: HTMLCanvasElement,
   landmarks: PoseLandmark2D[] | null,
   width: number,
   height: number,
+  hands?: Hand2D[] | null,
 ) {
   if (!width || !height) return
 
@@ -40,12 +41,18 @@ export function drawPose(
   const { ctx, utils } = drawer
 
   ctx.clearRect(0, 0, width, height)
-  if (!landmarks) return
-
-  // MediaPipe's drawing helpers expect a z value; 2D landmarks don't have one.
-  const points = landmarks.map((lm) => ({ ...lm, z: 0 }))
   const lineWidth = Math.max(2, width / 320) // looks the same at 480p and 1080p
 
-  utils.drawConnectors(points, PoseLandmarker.POSE_CONNECTIONS, { color: '#22d3ee', lineWidth })
-  utils.drawLandmarks(points, { color: '#f472b6', fillColor: '#f472b6', radius: lineWidth * 1.2, lineWidth: 1 })
+  if (landmarks) {
+    // MediaPipe's drawing helpers expect a z value; 2D landmarks don't have one.
+    const points = landmarks.map((lm) => ({ ...lm, z: 0 }))
+    utils.drawConnectors(points, PoseLandmarker.POSE_CONNECTIONS, { color: '#22d3ee', lineWidth })
+    utils.drawLandmarks(points, { color: '#f472b6', fillColor: '#f472b6', radius: lineWidth * 1.2, lineWidth: 1 })
+  }
+
+  for (const hand of hands ?? []) {
+    const points = hand.landmarks.map((lm) => ({ ...lm, z: 0, visibility: 1 }))
+    utils.drawConnectors(points, HandLandmarker.HAND_CONNECTIONS, { color: '#facc15', lineWidth: lineWidth * 0.75 })
+    utils.drawLandmarks(points, { color: '#facc15', fillColor: '#facc15', radius: lineWidth * 0.8, lineWidth: 1 })
+  }
 }

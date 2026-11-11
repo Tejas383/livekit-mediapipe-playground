@@ -1,5 +1,8 @@
 import { useEffect, useEffectEvent, useState } from 'react'
-import type { PoseFrame } from '../types/pose'
+import type { AnalyzerChoice } from '../posture/analyzer'
+import type { ExerciseId } from '../posture/exercises'
+import type { PostureEvent } from '../posture/types'
+import type { Hand2D, PoseFrame } from '../types/pose'
 import type { Delegate } from './createLandmarker'
 import {
   startMainThreadEngine,
@@ -12,11 +15,16 @@ import { readPoseSettings, type PoseEngine } from './settings'
 export interface PoseStats {
   status: 'loading' | 'running' | 'error'
   engine: PoseEngine
+  analyzer: AnalyzerChoice
   delegate?: Delegate
   /** Pose results per second. */
   fps: number
   /** Average time inside detectForVideo (ms) — on whichever thread runs it. */
   inferenceMs: number
+  /** Average time inside the posture analyzer's analyze() (ms). */
+  analysisMs: number
+  /** Posture events received per second. */
+  eventsPerSec: number
   /**
    * Longest main-thread frame in the last window (ms). ~16 ms at 60 Hz means a
    * smooth UI; big values mean something blocked the main thread.
@@ -36,13 +44,17 @@ const settings = readPoseSettings()
  */
 export function usePoseDetection(
   track: MediaStreamTrack | undefined,
-  onResult: (frame: PoseFrame) => void,
+  exercise: ExerciseId,
+  onResult: (frame: PoseFrame, hands: Hand2D[] | null, events: PostureEvent[]) => void,
 ): PoseStats {
   const [stats, setStats] = useState<PoseStats>({
     status: 'loading',
     engine: settings.engine,
+    analyzer: settings.analyzer,
     fps: 0,
     inferenceMs: 0,
+    analysisMs: 0,
+    eventsPerSec: 0,
     uiMaxFrameMs: 0,
   })
 
@@ -57,6 +69,8 @@ export function usePoseDetection(
     let failed = false
     let frames = 0
     let inferenceTotal = 0
+    let analysisTotal = 0
+    let eventCount = 0
     let uiMax = 0
     let lastRaf = performance.now()
     let windowStart = performance.now()
@@ -75,24 +89,31 @@ export function usePoseDetection(
         setStats({
           status: 'running',
           engine: settings.engine,
+          analyzer: settings.analyzer,
           delegate,
           fps: (frames * 1000) / elapsed,
           inferenceMs: frames ? inferenceTotal / frames : 0,
+          analysisMs: frames ? analysisTotal / frames : 0,
+          eventsPerSec: (eventCount * 1000) / elapsed,
           uiMaxFrameMs: uiMax,
         })
       }
       frames = 0
       inferenceTotal = 0
+      analysisTotal = 0
+      eventCount = 0
       uiMax = 0
       windowStart = performance.now()
     }, STATS_INTERVAL_MS)
 
     const callbacks: EngineCallbacks = {
       onReady: (d) => (delegate = d),
-      onResult: (frame, ms) => {
+      onResult: ({ frame, hands, events, inferenceMs, analysisMs }) => {
         frames++
-        inferenceTotal += ms
-        emitResult(frame)
+        inferenceTotal += inferenceMs
+        analysisTotal += analysisMs
+        eventCount += events.length
+        emitResult(frame, hands, events)
       },
       onError: (message) => {
         failed = true
@@ -107,14 +128,15 @@ export function usePoseDetection(
         : settings.engine === 'worker-bitmap'
           ? startWorkerBitmapEngine
           : startWorkerStreamEngine
-    const stop = start(track, settings.delegate, callbacks)
+    // Switching exercise restarts the engine (fresh analyzer, right models loaded).
+    const stop = start(track, { delegate: settings.delegate, analyzer: settings.analyzer, exercise }, callbacks)
 
     return () => {
       stop()
       clearInterval(timer)
       cancelAnimationFrame(rafId)
     }
-  }, [track])
+  }, [track, exercise])
 
   return stats
 }

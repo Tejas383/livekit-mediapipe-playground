@@ -2,7 +2,7 @@ import { useRoomContext } from '@livekit/components-react'
 import { RoomEvent, type RemoteParticipant } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
 import { drawPose } from '../pose/drawPose'
-import { decodePose, POSE_TOPIC } from '../pose/poseWire'
+import { decodePose, isNewerSeq, POSE_TOPIC } from '../pose/poseWire'
 
 /** Clear the skeleton if the sender goes quiet (camera off, left, tab hidden). */
 const STALE_AFTER_MS = 1000
@@ -26,11 +26,23 @@ export function RemotePoseOverlay({ identity }: RemotePoseOverlayProps) {
     let lastReceived = 0
     let received = 0
     let last: { width: number; height: number } | null = null
+    // Highest sequence number drawn so far; null = accept whatever comes next.
+    let lastSeq: number | null = null
+    let droppedOutOfOrder = 0
 
     const onData = (payload: Uint8Array, participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
       if (topic !== POSE_TOPIC || participant?.identity !== identity) return
-      const frame = decodePose(payload)
-      if (!frame || !canvasRef.current) return
+      const packet = decodePose(payload)
+      if (!packet || !canvasRef.current) return
+
+      // Lossy packets can arrive out of order. Never draw a pose older than
+      // the one already on screen.
+      if (lastSeq !== null && !isNewerSeq(packet.seq, lastSeq)) {
+        droppedOutOfOrder++
+        return
+      }
+      lastSeq = packet.seq
+      const { frame } = packet
 
       lastReceived = performance.now()
       received++
@@ -45,6 +57,13 @@ export function RemotePoseOverlay({ identity }: RemotePoseOverlayProps) {
       if (last && canvasRef.current && performance.now() - lastReceived > STALE_AFTER_MS) {
         drawPose(canvasRef.current, null, last.width, last.height)
         last = null
+        // The sender went quiet; if it comes back after a page reload its
+        // counter restarts from 0, so accept the next packet whatever its seq.
+        lastSeq = null
+      }
+      if (droppedOutOfOrder > 0) {
+        console.debug(`[pose] dropped ${droppedOutOfOrder} out-of-order packet(s) from ${identity}`)
+        droppedOutOfOrder = 0
       }
     }, STATS_INTERVAL_MS)
 

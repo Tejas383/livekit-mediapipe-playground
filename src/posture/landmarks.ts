@@ -1,0 +1,92 @@
+/**
+ * Landmark names and coordinate conversion — helpers only, no posture rules.
+ *
+ * Indices are MediaPipe BlazePose's 33-point order. LEFT/RIGHT mean the
+ * PERSON's left/right. Landmarks are in un-mirrored camera coordinates: the
+ * local tile is displayed mirrored, but the data is not.
+ */
+import type { PostureInput } from './types'
+
+export const LANDMARK = {
+  NOSE: 0,
+  LEFT_EYE_INNER: 1,
+  LEFT_EYE: 2,
+  LEFT_EYE_OUTER: 3,
+  RIGHT_EYE_INNER: 4,
+  RIGHT_EYE: 5,
+  RIGHT_EYE_OUTER: 6,
+  LEFT_EAR: 7,
+  RIGHT_EAR: 8,
+  MOUTH_LEFT: 9,
+  MOUTH_RIGHT: 10,
+  LEFT_SHOULDER: 11,
+  RIGHT_SHOULDER: 12,
+  LEFT_ELBOW: 13,
+  RIGHT_ELBOW: 14,
+  LEFT_WRIST: 15,
+  RIGHT_WRIST: 16,
+  LEFT_PINKY: 17,
+  RIGHT_PINKY: 18,
+  LEFT_INDEX: 19,
+  RIGHT_INDEX: 20,
+  LEFT_THUMB: 21,
+  RIGHT_THUMB: 22,
+  LEFT_HIP: 23,
+  RIGHT_HIP: 24,
+  LEFT_KNEE: 25,
+  RIGHT_KNEE: 26,
+  LEFT_ANKLE: 27,
+  RIGHT_ANKLE: 28,
+  LEFT_HEEL: 29,
+  RIGHT_HEEL: 30,
+  LEFT_FOOT_INDEX: 31,
+  RIGHT_FOOT_INDEX: 32,
+} as const
+
+export type LandmarkName = keyof typeof LANDMARK
+export type LandmarkIndex = (typeof LANDMARK)[LandmarkName]
+
+export interface PixelPoint {
+  x: number
+  y: number
+  visibility: number
+}
+
+/**
+ * A landmark in pixels. Normalized x and y use different scales on a
+ * non-square frame (x is a fraction of the width, y of the height), so
+ * compute angles and distances in pixels. Returns null if there's no person.
+ */
+export function toPixels(input: PostureInput, index: LandmarkIndex): PixelPoint | null {
+  const lm = input.landmarks?.[index]
+  if (!lm) return null
+  return { x: lm.x * input.width, y: lm.y * input.height, visibility: lm.visibility }
+}
+
+/**
+ * MediaPipe hand landmark indices (21 points per hand).
+ * Each finger has MCP (knuckle) → PIP → DIP → TIP; the thumb uses CMC/MCP/IP/TIP.
+ */
+export const HAND = {
+  WRIST: 0,
+  THUMB_CMC: 1,
+  THUMB_MCP: 2,
+  THUMB_IP: 3,
+  THUMB_TIP: 4,
+  INDEX_MCP: 5,
+  INDEX_PIP: 6,
+  INDEX_DIP: 7,
+  INDEX_TIP: 8,
+  MIDDLE_MCP: 9,
+  MIDDLE_PIP: 10,
+  MIDDLE_DIP: 11,
+  MIDDLE_TIP: 12,
+  RING_MCP: 13,
+  RING_PIP: 14,
+  RING_DIP: 15,
+  RING_TIP: 16,
+  PINKY_MCP: 17,
+  PINKY_PIP: 18,
+  PINKY_DIP: 19,
+  PINKY_TIP: 20,
+} as const

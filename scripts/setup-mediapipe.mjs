@@ -1,5 +1,5 @@
 /**
- * Downloads the MediaPipe pose model into public/mediapipe/models/ (gitignored).
+ * Downloads the MediaPipe models (pose, hands) into public/mediapipe/models/ (gitignored).
  * Runs automatically before `dev` and `build`; skips files already downloaded.
  *
  * The wasm runtime is NOT copied here: it's imported from node_modules with
@@ -15,6 +15,9 @@ const modelOut = join(root, 'public/mediapipe/models')
 const MODELS = {
   'pose_landmarker_lite.task':
     'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+  // Only loaded for exercises that need hands (e.g. fist clench).
+  'hand_landmarker.task':
+    'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
 }
 
 async function sizeOf(path) {

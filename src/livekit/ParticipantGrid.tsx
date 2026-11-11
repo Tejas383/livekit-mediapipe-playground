@@ -1,7 +1,9 @@
 import { GridLayout, isTrackReference, ParticipantTile, useTrackRefContext, useTracks } from '@livekit/components-react'
 import { Track } from 'livekit-client'
+import { useContext } from 'react'
 import { PoseOverlay } from '../components/PoseOverlay'
 import { RemotePoseOverlay } from '../components/RemotePoseOverlay'
+import { ExerciseContext } from './exerciseContext'
 
 /**
  * One tile per participant's camera. `withPlaceholder` keeps a tile for
@@ -27,12 +29,15 @@ export function ParticipantGrid() {
  */
 function PoseTile() {
   const trackRef = useTrackRefContext()
+  const { exercise } = useContext(ExerciseContext)
   const hasVideo = isTrackReference(trackRef) && !trackRef.publication.isMuted
 
   let overlay = null
   if (hasVideo && trackRef.participant.isLocal) {
     const track = trackRef.publication.track?.mediaStreamTrack
-    if (track) overlay = <PoseOverlay track={track} />
+    // key={exercise}: switching exercise remounts the overlay → new worker,
+    // new analyzer, counters back to zero.
+    if (track) overlay = <PoseOverlay key={exercise} track={track} exercise={exercise} />
   } else if (hasVideo) {
     overlay = <RemotePoseOverlay identity={trackRef.participant.identity} />
   }
