@@ -23,15 +23,7 @@ export function PoseOverlay({ track }: PoseOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const lastSentRef = useRef(0)
 
-  const stats = usePoseDetection(track, (result, video) => {
-    const pose = result.landmarks[0]
-    const frame: PoseFrame = {
-      width: video.videoWidth,
-      height: video.videoHeight,
-      // Keep only the 2D fields (x, y, visibility) — that's what we share.
-      landmarks: pose ? pose.map(({ x, y, visibility }) => ({ x, y, visibility })) : null,
-    }
-
+  const stats = usePoseDetection(track, (frame: PoseFrame) => {
     if (canvasRef.current) drawPose(canvasRef.current, frame.landmarks, frame.width, frame.height)
 
     const now = performance.now()
@@ -57,10 +49,16 @@ function PoseStatsBadge({ stats }: { stats: PoseStats }) {
   let text: string
   if (stats.status === 'loading') text = 'Pose: loading model…'
   else if (stats.status === 'error') text = `Pose error: ${stats.error}`
-  else text = `Pose ${stats.delegate} · ${stats.fps.toFixed(0)} fps · ${stats.inferenceMs.toFixed(1)} ms`
+  else
+    text =
+      `Pose ${stats.engine}/${stats.delegate} · ${stats.fps.toFixed(0)} fps · ` +
+      `${stats.inferenceMs.toFixed(1)} ms · UI ${stats.uiMaxFrameMs.toFixed(0)} ms`
 
   return (
-    <div className={`pose-stats pose-stats-${stats.status}`} title="Main-thread pose detection (Phase 2 baseline)">
+    <div
+      className={`pose-stats pose-stats-${stats.status}`}
+      title="engine/delegate · results per second · ms per detection · longest main-thread frame (UI smoothness). Change with ?pose=worker|worker-bitmap|main&delegate=GPU|CPU"
+    >
       {text}
     </div>
   )

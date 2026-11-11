@@ -1,21 +1,16 @@
 /**
- * Puts the MediaPipe runtime files where the browser can load them:
- *   public/mediapipe/wasm/    <- copied from node_modules/@mediapipe/tasks-vision/wasm
- *   public/mediapipe/models/  <- pose model downloaded from Google's model storage
+ * Downloads the MediaPipe pose model into public/mediapipe/models/ (gitignored).
+ * Runs automatically before `dev` and `build`; skips files already downloaded.
  *
- * Serving these ourselves (instead of from a CDN) keeps the wasm version in
- * lockstep with the installed npm package and works offline after the first run.
- * The folder is gitignored; this runs automatically before `dev` and `build`.
+ * The wasm runtime is NOT copied here: it's imported from node_modules with
+ * Vite `?url` imports (see src/pose/pose.worker.ts for why).
  */
-import { copyFile, mkdir, readdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const wasmSrc = join(root, 'node_modules/@mediapipe/tasks-vision/wasm')
-const outDir = join(root, 'public/mediapipe')
-const wasmOut = join(outDir, 'wasm')
-const modelOut = join(outDir, 'models')
+const modelOut = join(root, 'public/mediapipe/models')
 
 const MODELS = {
   'pose_landmarker_lite.task':
@@ -27,19 +22,6 @@ async function sizeOf(path) {
     return (await stat(path)).size
   } catch {
     return -1
-  }
-}
-
-async function copyWasm() {
-  await mkdir(wasmOut, { recursive: true })
-  for (const file of await readdir(wasmSrc)) {
-    const from = join(wasmSrc, file)
-    const to = join(wasmOut, file)
-    // Re-copy when missing or when the package was upgraded (size differs).
-    if ((await sizeOf(from)) !== (await sizeOf(to))) {
-      await copyFile(from, to)
-      console.log(`[mediapipe] copied wasm/${file}`)
-    }
   }
 }
 
@@ -56,5 +38,4 @@ async function downloadModels() {
   }
 }
 
-await copyWasm()
 await downloadModels()

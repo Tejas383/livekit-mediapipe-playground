@@ -15,4 +15,9 @@ export default defineConfig({
     // Listen on all interfaces so phones/laptops on the same network can connect.
     host: true,
   },
+  worker: {
+    // The pose worker is a module worker (it uses `import`, and MediaPipe's
+    // module loader relies on dynamic import()), so bundle it as ES modules.
+    format: 'es',
+  },
 })

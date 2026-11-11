@@ -1,106 +1,118 @@
-import type { PoseLandmarkerResult } from '@mediapipe/tasks-vision'
 import { useEffect, useEffectEvent, useState } from 'react'
-import { getPoseLandmarker, type Delegate } from './landmarker'
+import type { PoseFrame } from '../types/pose'
+import type { Delegate } from './createLandmarker'
+import {
+  startMainThreadEngine,
+  startWorkerBitmapEngine,
+  startWorkerStreamEngine,
+  type EngineCallbacks,
+} from './engines'
+import { readPoseSettings, type PoseEngine } from './settings'
 
 export interface PoseStats {
   status: 'loading' | 'running' | 'error'
+  engine: PoseEngine
   delegate?: Delegate
-  /** Pose detections per second (≈ processed camera frames per second). */
+  /** Pose results per second. */
   fps: number
-  /** Average time spent inside detectForVideo, in ms. Blocks the main thread! */
+  /** Average time inside detectForVideo (ms) — on whichever thread runs it. */
   inferenceMs: number
+  /**
+   * Longest main-thread frame in the last window (ms). ~16 ms at 60 Hz means a
+   * smooth UI; big values mean something blocked the main thread.
+   */
+  uiMaxFrameMs: number
   error?: string
 }
 
-/** How often the stats readout refreshes. Per-frame React updates would be wasteful. */
 const STATS_INTERVAL_MS = 500
+const settings = readPoseSettings()
 
 /**
- * Runs MediaPipe pose detection on a camera track, on the MAIN THREAD.
- * (Phase 2 baseline — Phase 3 moves this into a Web Worker.)
- *
- * Results are delivered through `onResult` on every processed frame instead
- * of React state, so drawing happens without re-rendering components 30×/s.
- * Only the summarized stats go through React state.
+ * Runs pose detection on a camera track with the engine chosen in the URL
+ * (default: Web Worker). Every result goes to `onResult` directly — not React
+ * state — so drawing doesn't re-render components 30×/s. Only the summarized
+ * stats go through React state.
  */
 export function usePoseDetection(
   track: MediaStreamTrack | undefined,
-  onResult: (result: PoseLandmarkerResult, video: HTMLVideoElement) => void,
+  onResult: (frame: PoseFrame) => void,
 ): PoseStats {
-  const [stats, setStats] = useState<PoseStats>({ status: 'loading', fps: 0, inferenceMs: 0 })
+  const [stats, setStats] = useState<PoseStats>({
+    status: 'loading',
+    engine: settings.engine,
+    fps: 0,
+    inferenceMs: 0,
+    uiMaxFrameMs: 0,
+  })
 
-  // Always calls the latest `onResult` without making it an effect dependency
-  // (otherwise the whole pipeline would restart on every render).
+  // Calls the latest `onResult` without making it an effect dependency
+  // (otherwise the engine would restart on every render).
   const emitResult = useEffectEvent(onResult)
 
   useEffect(() => {
     if (!track) return
 
-    let cancelled = false
-    let rafId = 0
+    let delegate: Delegate | undefined
+    let failed = false
+    let frames = 0
+    let inferenceTotal = 0
+    let uiMax = 0
+    let lastRaf = performance.now()
+    let windowStart = performance.now()
 
-    // Our own <video> element, fed directly from the track. It's never added
-    // to the page — it only exists so MediaPipe has frames to read. The tile's
-    // visible <video> is owned by LiveKit and we leave it alone.
-    const video = document.createElement('video')
-    video.muted = true
-    video.playsInline = true
-    video.srcObject = new MediaStream([track])
-    video.play().catch((err) => console.warn('[pose] video.play() failed', err))
+    // Measures main-thread smoothness independently of the engine.
+    let rafId = requestAnimationFrame(function measure(now) {
+      uiMax = Math.max(uiMax, now - lastRaf)
+      lastRaf = now
+      rafId = requestAnimationFrame(measure)
+    })
 
-    getPoseLandmarker()
-      .then(({ landmarker, delegate }) => {
-        if (cancelled) return
+    const timer = setInterval(() => {
+      if (failed) return
+      const elapsed = performance.now() - windowStart
+      if (delegate) {
+        setStats({
+          status: 'running',
+          engine: settings.engine,
+          delegate,
+          fps: (frames * 1000) / elapsed,
+          inferenceMs: frames ? inferenceTotal / frames : 0,
+          uiMaxFrameMs: uiMax,
+        })
+      }
+      frames = 0
+      inferenceTotal = 0
+      uiMax = 0
+      windowStart = performance.now()
+    }, STATS_INTERVAL_MS)
 
-        let lastVideoTime = -1
-        let frames = 0
-        let inferenceTotal = 0
-        let windowStart = performance.now()
+    const callbacks: EngineCallbacks = {
+      onReady: (d) => (delegate = d),
+      onResult: (frame, ms) => {
+        frames++
+        inferenceTotal += ms
+        emitResult(frame)
+      },
+      onError: (message) => {
+        failed = true
+        console.error('[pose]', message)
+        setStats((s) => ({ ...s, status: 'error', error: message }))
+      },
+    }
 
-        const loop = () => {
-          rafId = requestAnimationFrame(loop)
-
-          // rAF runs at display rate (often 60–120 Hz); the camera is usually
-          // 30 fps. Only run inference when the video has a NEW frame.
-          if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
-          if (video.currentTime === lastVideoTime) return
-          lastVideoTime = video.currentTime
-
-          const start = performance.now()
-          // Synchronous: the UI is frozen for the duration of this call.
-          const result = landmarker.detectForVideo(video, start)
-          inferenceTotal += performance.now() - start
-          frames++
-
-          emitResult(result, video)
-
-          const elapsed = performance.now() - windowStart
-          if (elapsed >= STATS_INTERVAL_MS) {
-            setStats({
-              status: 'running',
-              delegate,
-              fps: (frames * 1000) / elapsed,
-              inferenceMs: inferenceTotal / frames,
-            })
-            frames = 0
-            inferenceTotal = 0
-            windowStart = performance.now()
-          }
-        }
-        rafId = requestAnimationFrame(loop)
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        console.error('[pose] failed to load PoseLandmarker', err)
-        setStats({ status: 'error', fps: 0, inferenceMs: 0, error: err instanceof Error ? err.message : String(err) })
-      })
+    const start =
+      settings.engine === 'main'
+        ? startMainThreadEngine
+        : settings.engine === 'worker-bitmap'
+          ? startWorkerBitmapEngine
+          : startWorkerStreamEngine
+    const stop = start(track, settings.delegate, callbacks)
 
     return () => {
-      cancelled = true
+      stop()
+      clearInterval(timer)
       cancelAnimationFrame(rafId)
-      video.pause()
-      // Detach only. Never call track.stop() — the track belongs to LiveKit.
-      video.srcObject = null
     }
   }, [track])
 
