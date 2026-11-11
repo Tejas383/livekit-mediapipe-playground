@@ -32,3 +32,4 @@ claude.md
 PLAN.md
 # MediaPipe runtime files (copied/downloaded by scripts/setup-mediapipe.mjs)
 public/mediapipe/
+docs/posture-integration.md
